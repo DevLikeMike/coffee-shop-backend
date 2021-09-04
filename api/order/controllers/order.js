@@ -44,22 +44,30 @@ module.exports = {
     }
     return sanitizeEntity(entity, { model: strapi.models.order });
   },
+  // Post request to strapi/orders - PAY ATTENTION TO S on the end!!!
   async create(ctx) {
-    const { product } = ctx.request.body;
+    /* TODO
+     * Products should bring in, size, quanity, price, and id, name
+     * Possibly request from strapi for each id passed in
+     */
+    const { products } = ctx.request.body;
     const { user } = ctx.state;
     const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
-    if (!product) {
-      return ctx.throw(400, "Please specify a product");
-    }
-
-    const realProduct = await strapi.services.coffees.findOne({
-      id: product.id,
+    // Map through all products from cart then make them a line item and put into array
+    const lineItems = products.map((product) => {
+      let item = {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `${product.name} (${product.size})`,
+          },
+          unit_amount: fromDecimalToInt(product.price),
+        },
+        quantity: product.quantity,
+      };
+      return item;
     });
-
-    if (!realProduct) {
-      return ctx.throw(404, "No product with such Id");
-    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -67,29 +75,42 @@ module.exports = {
       mode: "payment",
       success_url: `${BASE_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: BASE_URL,
-      line_items: [
-        {
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: realProduct.name,
-            },
-            unit_amount: fromDecimalToInt(realProduct.price),
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: lineItems,
     });
 
     // Create Order
     const newOrder = await strapi.services.order.create({
       user: user.id,
-      product: realProduct.id,
-      total: realProduct.price,
+      product: 3,
+      total: 100,
       status: "unpaid",
       checkout_session: session.id,
     });
 
     return { id: session.id };
+  },
+
+  async confirm(ctx) {
+    // Retrieve session id from body
+    const { checkout_session } = ctx.request.body;
+
+    // Retrieve sesssion from stripe
+    const session = await stripe.checkout.sessions.retrieve(checkout_session);
+
+    // If paid then update status, else throw 400 error with message
+    if (session.payment_status === "paid") {
+      const updateOrder = await strapi.services.order.update(
+        {
+          checkout_session,
+        },
+        {
+          status: "paid",
+        }
+      );
+
+      return sanitizeEntity(updateOrder, { model: strapi.models.order });
+    } else {
+      ctx.throw(400, "Payment not successful, please contact support");
+    }
   },
 };
