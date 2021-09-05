@@ -78,11 +78,13 @@ module.exports = {
       line_items: lineItems,
     });
 
+    console.log(session);
+
     // Create Order
     const newOrder = await strapi.services.order.create({
       user: user.id,
       product: 3,
-      total: 100,
+      total: (session.amount_total / 100).toFixed(2),
       status: "unpaid",
       checkout_session: session.id,
     });
